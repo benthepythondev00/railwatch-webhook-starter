@@ -1,0 +1,88 @@
+{
+  "name": "RailWatch signed webhook -> verify -> Discord",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "railwatch",
+        "responseMode": "responseNode",
+        "options": { "rawBody": true }
+      },
+      "name": "RailWatch Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "railwatch-starter"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Paste the channel_secret you sent to RailWatch when you created the watch.\nconst SECRET = 'replace-with-your-channel-secret';\nconst crypto = require('crypto');\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst given = String(headers['x-railwatch-signature'] || '').trim();\n// Raw Body is on in the Webhook node, so the exact bytes RailWatch signed are in binary.data.\nconst raw = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst expected = 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw).digest('hex');\nconst a = Buffer.from(expected);\nconst b = Buffer.from(given);\nconst valid = a.length === b.length && crypto.timingSafeEqual(a, b);\nif (!valid) {\n  return [{ json: { valid: false } }];\n}\nconst env = JSON.parse(raw.toString('utf8'));\nconst lines = [`**${env.watch_name || 'RailWatch'}**: ${env.event_count || 0} change(s)`];\nfor (const ev of (env.events || []).slice(0, 10)) {\n  const title = ev.title || ev.identity || 'change';\n  const head = ev.url ? `[${title}](<${ev.url}>)` : title;\n  lines.push(`- \\`${ev.change_type || 'change'}\\` ${head}: ${ev.summary || ''}`);\n}\nreturn [{ json: { valid: true, deliveryId: env.delivery_id || null, envelope: env, discord: { content: lines.join('\\n').slice(0, 1990), allowed_mentions: { parse: [] } } } }];\n"
+      },
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/webhooks/REPLACE/ME",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.discord) }}",
+        "options": {}
+      },
+      "name": "Post to Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, -100]
+    },
+    {
+      "parameters": { "respondWith": "text", "responseBody": "ok", "options": { "responseCode": 200 } },
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, -100]
+    },
+    {
+      "parameters": { "respondWith": "text", "responseBody": "invalid signature", "options": { "responseCode": 401 } },
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [720, 100]
+    }
+  ],
+  "connections": {
+    "RailWatch Webhook": { "main": [[{ "node": "Verify signature", "type": "main", "index": 0 }]] },
+    "Verify signature": { "main": [[{ "node": "Valid?", "type": "main", "index": 0 }]] },
+    "Valid?": {
+      "main": [
+        [{ "node": "Post to Discord", "type": "main", "index": 0 }],
+        [{ "node": "Respond 401", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post to Discord": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
